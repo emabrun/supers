@@ -1,0 +1,63 @@
+name: Inspeccionar SEPA
+
+on:
+  workflow_dispatch:
+
+jobs:
+  inspeccionar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Descargar el archivo más reciente y mostrar su estructura
+        run: |
+          curl -sS -L "https://datos.produccion.gob.ar/api/3/action/package_show?id=sepa-precios" -o paquete.json
+          python3 - <<'EOF'
+          import io, json, os, urllib.request, zipfile
+
+          datos = json.load(open("paquete.json"))
+          recursos = [r for r in datos["result"]["resources"] if (r.get("url") or "").endswith(".zip")]
+          print("Archivos zip publicados:")
+          for r in recursos:
+              print(" -", r.get("name"), "|", r.get("last_modified") or r.get("created"), "|", r.get("url"))
+
+          recursos.sort(key=lambda r: r.get("last_modified") or r.get("created") or "", reverse=True)
+          elegido = recursos[0]
+          print("\nDescargando el más reciente:", elegido.get("name"), elegido["url"])
+          urllib.request.urlretrieve(elegido["url"], "sepa.zip")
+          print("Tamaño: %.1f MB" % (os.path.getsize("sepa.zip") / 1e6))
+
+          z = zipfile.ZipFile("sepa.zip")
+          nombres = z.namelist()
+          print("Contenido: %d archivos. Primeros 15:" % len(nombres))
+          for n in nombres[:15]:
+              print("  ", n)
+
+          def ver(zf, titulo):
+              print("\n=== " + titulo + " ===")
+              for n in zf.namelist():
+                  print("  archivo:", n)
+                  if n.lower().endswith((".csv", ".txt")):
+                      with zf.open(n) as f:
+                          for i, linea in enumerate(f):
+                              if i >= 3:
+                                  break
+                              print("     ", linea.decode("utf-8", "replace").rstrip()[:400])
+
+          anidados = [n for n in nombres if n.lower().endswith(".zip")]
+          if anidados:
+              primero = zipfile.ZipFile(io.BytesIO(z.read(anidados[0])))
+              ver(primero, "Primer zip interno: " + anidados[0])
+              print("\n=== Cadenas (segunda línea de cada comercio.csv) ===")
+              for n in anidados:
+                  try:
+                      zi = zipfile.ZipFile(io.BytesIO(z.read(n)))
+                      for m in zi.namelist():
+                          if m.lower().endswith("comercio.csv"):
+                              with zi.open(m) as f:
+                                  lineas = f.read(3000).decode("utf-8", "replace").splitlines()
+                              print(n, "->", lineas[1][:300] if len(lineas) > 1 else lineas)
+                  except Exception as e:
+                      print(n, "-> error", e)
+          else:
+              ver(z, "Contenido directo")
+          EOF
