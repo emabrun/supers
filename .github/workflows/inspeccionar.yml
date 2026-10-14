@@ -6,58 +6,30 @@ on:
 jobs:
   inspeccionar:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 15
+    env:
+      UA: "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
+      BASE: "https://datos.produccion.gob.ar/dataset/6f47ec76-d1ce-4e34-a7e1-621fe9b1d0b5/resource"
     steps:
-      - name: Descargar el archivo más reciente y mostrar su estructura
+      - name: Prueba 1 - consultar la API del portal
         run: |
-          curl -sS -L "https://datos.produccion.gob.ar/api/3/action/package_show?id=sepa-precios" -o paquete.json
-          python3 - <<'EOF'
-          import io, json, os, urllib.request, zipfile
+          curl -sS -L -i -A "$UA" --max-time 60 "https://datos.produccion.gob.ar/api/3/action/package_show?id=sepa-precios" -o respuesta.txt || echo "curl fallo con codigo $?"
+          echo "Tamano de la respuesta: $(wc -c < respuesta.txt 2>/dev/null) bytes"
+          echo "----- primeros 1500 caracteres -----"
+          head -c 1500 respuesta.txt 2>/dev/null || true
 
-          datos = json.load(open("paquete.json"))
-          recursos = [r for r in datos["result"]["resources"] if (r.get("url") or "").endswith(".zip")]
-          print("Archivos zip publicados:")
-          for r in recursos:
-              print(" -", r.get("name"), "|", r.get("last_modified") or r.get("created"), "|", r.get("url"))
-
-          recursos.sort(key=lambda r: r.get("last_modified") or r.get("created") or "", reverse=True)
-          elegido = recursos[0]
-          print("\nDescargando el más reciente:", elegido.get("name"), elegido["url"])
-          urllib.request.urlretrieve(elegido["url"], "sepa.zip")
-          print("Tamaño: %.1f MB" % (os.path.getsize("sepa.zip") / 1e6))
-
-          z = zipfile.ZipFile("sepa.zip")
-          nombres = z.namelist()
-          print("Contenido: %d archivos. Primeros 15:" % len(nombres))
-          for n in nombres[:15]:
-              print("  ", n)
-
-          def ver(zf, titulo):
-              print("\n=== " + titulo + " ===")
-              for n in zf.namelist():
-                  print("  archivo:", n)
-                  if n.lower().endswith((".csv", ".txt")):
-                      with zf.open(n) as f:
-                          for i, linea in enumerate(f):
-                              if i >= 3:
-                                  break
-                              print("     ", linea.decode("utf-8", "replace").rstrip()[:400])
-
-          anidados = [n for n in nombres if n.lower().endswith(".zip")]
-          if anidados:
-              primero = zipfile.ZipFile(io.BytesIO(z.read(anidados[0])))
-              ver(primero, "Primer zip interno: " + anidados[0])
-              print("\n=== Cadenas (segunda línea de cada comercio.csv) ===")
-              for n in anidados:
-                  try:
-                      zi = zipfile.ZipFile(io.BytesIO(z.read(n)))
-                      for m in zi.namelist():
-                          if m.lower().endswith("comercio.csv"):
-                              with zi.open(m) as f:
-                                  lineas = f.read(3000).decode("utf-8", "replace").splitlines()
-                              print(n, "->", lineas[1][:300] if len(lineas) > 1 else lineas)
-                  except Exception as e:
-                      print(n, "-> error", e)
-          else:
-              ver(z, "Contenido directo")
-          EOF
+      - name: Prueba 2 - consultar los enlaces directos de cada dia (solo cabeceras)
+        run: |
+          for par in \
+            "lunes 0a9069a9-06e8-4f98-874d-da5578693290" \
+            "martes 9dc06241-cc83-44f4-8e25-c9b1636b8bc8" \
+            "miercoles 1e92cd42-4f94-4071-a165-62c4cb2ce23c" \
+            "jueves d076720f-a7f0-4af8-b1d6-1b99d5a90c14" \
+            "viernes 91bc072a-4726-44a1-85ec-4a8467aad27e" \
+            "sabado b3c3da5d-213d-41e7-8d74-f23fda0a3c30" \
+            "domingo f8e75128-515a-436e-bf8d-5c63a62f2005"; do
+            set -- $par
+            echo
+            echo "===== $1 ====="
+            curl -sS -L -I -A "$UA" --max-time 60 "$BASE/$2/download/sepa_$1.zip" 2>&1 | grep -iE '^(HTTP|location|content-length|content-type|last-modified|server)' || echo "sin respuesta"
+          done
